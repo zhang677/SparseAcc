@@ -16,8 +16,8 @@ def get_dram_max(coo):
   '''
   [Cache A, Cache A^T, Cache C]
   '''
-  A = coo.to_csr()
-  A_T = A.transpose()
+  A = coo.tocsr()
+  A_T = coo.transpose().tocsr()
   (row, col) = A.shape
 
   if row == col:
@@ -61,7 +61,7 @@ def get_dram_min(coo):
   '''
   [Cache A, Cache A^T, Cache C]
   '''
-  A = coo.to_csr()
+  A = coo.tocsr()
   A_T = A.transpose()
   (row, col) = A.shape
   if row == col:
@@ -74,7 +74,7 @@ def get_dram_min(coo):
     # B = A^T
     GB = A.nnz
     
-  return {"G":[A.nnz,GB,col],"O":[A.nnz,RB,row*col],I:[A.nnz,A.nnz,0]}
+  return {"G":[A.nnz,GB,col],"O":[A.nnz,GB,row*col],"I":[A.nnz,A.nnz,0]}
 
 
 def get_dram_estimate(coo, cache):
@@ -94,5 +94,5 @@ if __name__ == "__main__":
   name = 'DAWN-unique-hyperedges.mtx'
   file_path = root + name
   coo = mmread(file_path)
-  dram = get_dram_estimate(coo, coo.nnz / 2)
+  dram = get_dram_estimate(coo, {"G": coo.nnz / 2, "O": coo.nnz / 2, "I": coo.nnz / 2})
   print(dram)
