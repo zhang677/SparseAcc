@@ -1,0 +1,107 @@
+-
+  op_type: mm
+  op_name: fc1
+  op_input_data:
+    data_name: input_feature
+    data_shape: 
+      - 19717
+      - 512
+    read_data_path: input_feature.npy
+  op_acc_data: null
+  op_output_data:
+    data_name: fc1_out_feature
+    data_shape: 
+      - 19717
+      - 128
+  op_weight:
+    data_name: fc1_weight
+    data_shape: 
+      - 512
+      - 128
+    read_data_path: fc1_weight.npy
+  op_bias:
+    data_name: fc1_bias
+    data_shape:
+      - 1
+      - 128
+    read_data_path: fc1_bias.npy
+  accumulation: false
+  bias: true
+  relu: false
+-
+  op_type: agg
+  op_name: agg1
+  op_input_data:
+    data_name: fc1_out_feature
+    data_shape: 
+      - 19717
+      - 128
+  op_output_data:
+    data_name: agg1_out_feature
+    data_shape: 
+      - 19717
+      - 128
+  op_adj:
+    data_name: agg1_adj
+    data_shape: 
+      - 19717
+      - 19717 
+    non_zero: 88651
+    read_data_path: agg1_adj.npy
+    read_index_path: agg1_index.npy
+  apply: true
+  reduce_type: sum
+  relu: true
+-
+  op_type: mm
+  op_name: fc2
+  op_input_data:
+    data_name: agg1_out_feature
+    data_shape: 
+      - 19717
+      - 128
+  op_acc_data: null
+  op_output_data:
+    data_name: fc2_out_feature
+    data_shape: 
+      - 19717
+      - 16
+  op_weight:
+    data_name: fc2_weight
+    data_shape: 
+      - 128
+      - 16
+    read_data_path: fc2_weight.npy
+  op_bias:
+    data_name: fc2_bias
+    data_shape:
+      - 1
+      - 16
+    read_data_path: fc2_bias.npy
+  accumulation: false
+  bias: true
+  relu: false
+-
+  op_type: agg
+  op_name: agg2
+  op_input_data:
+    data_name: fc2_out_feature
+    data_shape: 
+      - 19717
+      - 16
+  op_output_data:
+    data_name: agg2_out_feature
+    data_shape: 
+      - 19717
+      - 16
+  op_adj:
+    data_name: agg2_adj
+    data_shape: 
+      - 19717
+      - 19717 
+    non_zero: 88651
+    read_data_path: agg2_adj.npy
+    read_index_path: agg2_index.npy
+  apply: true
+  reduce_type: sum
+  relu: true
