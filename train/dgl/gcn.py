@@ -52,11 +52,11 @@ def train(g, features, labels, masks, model):
         loss.backward()
         optimizer.step()
         acc = evaluate(g, features, labels, val_mask, model)
-        print("Epoch {:05d} | Loss {:.4f} | Accuracy {:.4f} "
-              . format(epoch, loss.item(), acc))
+        print("Epoch {:05d} | Loss {:.4f} | Accuracy {:.4f} ".format(epoch, loss.item(), acc))
 
 def trace_fx(model, g, features):
     from torch.fx import symbolic_trace
+
     model.eval()
     print(model)
     symbolic_traced = symbolic_trace(model, concrete_args={"g": g, "features": features})
@@ -69,6 +69,7 @@ def trace_jit(model, g, features):
 
 def trace_profile(model, g, features):
     from torch.profiler import profile, ProfilerActivity
+
     model.eval()
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
         model(g, features)
@@ -93,9 +94,43 @@ def print_model(model, g, feature):
 
 def enlarge_feature(g):
     from math import log2, pow
+
     shape = g.ndata['feat'].shape
     feat_num = pow(2, int(log2(shape[1])) + 1)
     g.ndata['feat'] = F.pad(g.ndata['feat'], (0,int(feat_num-shape[1])), "constant", 0)
+
+def store_adj(g, norm, num):
+    import numpy as np
+
+    tg = dgl.reorder_graph(g, edge_permute_algo='src')
+    tg = dgl.reorder_graph(tg, edge_permute_algo='dst') # Sort for the [dst->src] output
+
+    in_degs = tg.in_degrees().float().clamp(min=1)
+    r_norm = 1 / in_degs
+    tg.ndata['r_norm'] = r_norm.unsqueeze(1)
+    out_degs = tg.out_degrees().float().clamp(min=1)
+    l_norm = 1 / out_degs
+    tg.ndata['l_norm'] = l_norm.unsqueeze(1)
+    if norm == "left":
+        def copy(edges):
+            return {'norm': edges.src['l_norm']} # After sorting, it should get from src.
+    elif norm == "right":
+        def copy(edges):
+            return {'norm': edges.dst['r_norm']}
+    tg.apply_edges(copy)
+
+    agg_adj = tg.edata['norm'].cpu().numpy().transpose()
+    f = open(f"../trace/agg{int(num)}_adj.npy", "wb")
+    np.save(f, agg_adj)
+    f.close()
+
+    coo = tg.adjacency_matrix(transpose = True ,scipy_fmt = 'coo')
+    row_ids = np.expand_dims(coo.row, axis=0)
+    col_ids = np.expand_dims(coo.col, axis=0)
+    agg_index = np.concatenate((row_ids, col_ids), axis=0)
+    f = open(f"../trace/agg{int(num)}_index.npy", "wb")
+    np.save(f, agg_index)
+    f.close()
 
 
 
