@@ -99,6 +99,19 @@ def enlarge_feature(g):
     feat_num = pow(2, int(log2(shape[1])) + 1)
     g.ndata['feat'] = F.pad(g.ndata['feat'], (0,int(feat_num-shape[1])), "constant", 0)
 
+def store_fc(model, num):
+    assert num < len(model.layers)
+
+    import numpy as np
+
+    f = open(f"../trace/fc{int(num)}_weight.npy", "wb")
+    np.save(f, model.layers[num].state_dict()['weight'].cpu().numpy())
+    f.close()
+
+    f = open(f"../trace/fc{int(num)}_bias.npy", "wb")
+    np.save(f, model.layers[num].state_dict()['bias'].cpu().numpy())
+    f.close()
+
 def store_adj(g, norm, num):
     import numpy as np
 
@@ -106,17 +119,22 @@ def store_adj(g, norm, num):
     tg = dgl.reorder_graph(tg, edge_permute_algo='dst') # Sort for the [dst->src] output
 
     in_degs = tg.in_degrees().float().clamp(min=1)
-    r_norm = 1 / in_degs
-    tg.ndata['r_norm'] = r_norm.unsqueeze(1)
     out_degs = tg.out_degrees().float().clamp(min=1)
-    l_norm = 1 / out_degs
-    tg.ndata['l_norm'] = l_norm.unsqueeze(1)
+
+    tg.ndata['r_norm'] = 1.0 / in_degs
+    tg.ndata['l_norm'] = 1.0 / out_degs
     if norm == "left":
         def copy(edges):
             return {'norm': edges.src['l_norm']} # After sorting, it should get from src.
     elif norm == "right":
         def copy(edges):
             return {'norm': edges.dst['r_norm']}
+    elif norm == "both":
+        tg.data['l_norm'] = torch.pow(in_degs, -0.5)
+        tg.data['r_norm'] = torch.pow(out_degs, -0.5)
+        def copy(edges):
+            return {'norm': edges.dst['l_norm'] * edges.src['r_norm']}
+
     tg.apply_edges(copy)
 
     agg_adj = tg.edata['norm'].cpu().numpy().transpose()
