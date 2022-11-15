@@ -7,6 +7,7 @@ from dgl.data import CoraGraphDataset, CiteseerGraphDataset, PubmedGraphDataset
 from dgl import AddSelfLoop
 import dgl
 import numpy as np
+import yaml
 
 
 class Counter:
@@ -31,30 +32,38 @@ def get_upper_power_two(x: int):
     return int(pow(2, int(log2(x)) + 1))
 
 def enlarge_and_save(t: torch.Tensor, dims ,name: str):
-    (old_row, old_col) = t.shape
-    f = open(f"../trace/{name}.npy", "wb")
-    if dims == (0,1):
-        new_row = get_upper_power_two(old_row)
+    print(f"{name}: {t.shape}")
+    if len(t.shape) == 1:
+        old_col = t.shape[0]
+        f = open(f"../trace/{name}.npy", "wb")
         new_col = get_upper_power_two(old_col)
-        F.pad(t, (0, int(new_col - old_col), 0, int(new_row - old_row)), "constant", 0)
-    elif dims == 0:
-        new_row = get_upper_power_two(old_row)
-        new_col = old_col
-        F.pad(t, (0, 0, 0, int(new_row - old_row)), "constant", 0)
-    elif dims == 1:
-        new_col = get_upper_power_two(old_col)
-        new_row = old_row
         F.pad(t, (0, int(new_col - old_col)), "constant", 0)
-    else:
-        raise NotImplementedError
-    np.save(f, t.numpy())
-    f.close()
-    return torch.Size((new_row, new_col))
+        np.save(f, t.cpu().numpy())
+        f.close()
+        return torch.Size([new_col])
+    if len(t.shape) == 2:
+        (old_row, old_col) = t.shape
+        f = open(f"../trace/{name}.npy", "wb")
+        if dims == (0,1):
+            new_row = get_upper_power_two(old_row)
+            new_col = get_upper_power_two(old_col)
+            F.pad(t, (0, int(new_col - old_col), 0, int(new_row - old_row)), "constant", 0)
+        elif dims == 0:
+            new_row = get_upper_power_two(old_row)
+            new_col = old_col
+            F.pad(t, (0, 0, 0, int(new_row - old_row)), "constant", 0)
+        elif dims == 1:
+            new_col = get_upper_power_two(old_col)
+            new_row = old_row
+            F.pad(t, (0, int(new_col - old_col)), "constant", 0)
+        else:
+            raise NotImplementedError
+        np.save(f, t.cpu().numpy())
+        f.close()
+        return torch.Size((new_row, new_col))
+    raise NotImplementedError
 
 def generate_ir(model, g):
-    # [TODO]: The file path may go wrong
-    import yaml
-
     class Counter:
         def __init__(self, names) -> None:
             self.states = {}
@@ -85,8 +94,8 @@ def generate_ir(model, g):
             if layer.__dict__['_activation'] is not None:
                 if layer.__dict__['_activation'].__name__ == "relu":
                     relu = True
-            in_feat = layer.__dict__['_in_feats']
-            out_feat = layer.__dict__['_out_feats']
+            in_feat = get_upper_power_two(layer.__dict__['_in_feats'])
+            out_feat = get_upper_power_two(layer.__dict__['_out_feats'])
             num_nodes = g.num_nodes()
 
             # Add mm
@@ -126,6 +135,7 @@ def generate_ir(model, g):
     yaml.dump(final, f)
 
 def save_adj(g, norm, name):
+
     tg = dgl.reorder_graph(g, edge_permute_algo='src')
     tg = dgl.reorder_graph(tg, edge_permute_algo='dst') # Sort for the [dst->src] output
 
@@ -141,8 +151,8 @@ def save_adj(g, norm, name):
         def copy(edges):
             return {'norm': edges.dst['r_norm']}
     elif norm == "both":
-        tg.data['l_norm'] = torch.pow(in_degs, -0.5)
-        tg.data['r_norm'] = torch.pow(out_degs, -0.5)
+        tg.ndata['l_norm'] = torch.pow(in_degs, -0.5)
+        tg.ndata['r_norm'] = torch.pow(out_degs, -0.5)
         def copy(edges):
             return {'norm': edges.dst['l_norm'] * edges.src['r_norm']}
 
@@ -161,7 +171,7 @@ def save_adj(g, norm, name):
     np.save(f, agg_index)
     f.close()
 
-def store_all(model, g):
+def save_all(model, g):
     counter = Counter(["fc", "agg"])
     model.eval()
     for (i, layer) in enumerate(model.layers):
@@ -199,9 +209,10 @@ if __name__ == '__main__':
     else:
         raise ValueError('Unknown dataset: {}'.format(args.dataset))
     g = data[0]
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = torch.load(args.path)
+    generate_ir(model, g)
+    save_all(model, g)
 
 
 
