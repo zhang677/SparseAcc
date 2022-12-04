@@ -10,6 +10,7 @@ coo_col = agg1_index[1]
 num_nodes = input_feature.shape[0]
 
 """
+# Use adjacency matrix to generate norm
 num_nodes = input_feature.shape[0]
 agg1_coo_ones = sp.coo_matrix((np.ones(agg1_adj.shape), (coo_row, coo_col)), shape=(num_nodes, num_nodes))
 agg1_coo_ones_T = sp.coo_matrix((np.ones(agg1_adj.shape), (coo_col, coo_row)), shape=(num_nodes, num_nodes))
@@ -55,7 +56,7 @@ fc2_weight_t = torch.from_numpy(fc2_weight)
 feat2_dgl = dgl_GraphConv(fc2_weight.shape[0], fc2_weight.shape[1], g, feat1_dgl, fc2_weight_t, norm='both')
 feat2_dgl_np = np.array(feat2_dgl)
 
-print(f"feat2_dgl_np vs. feat2: {np.all(np.isclose(feat2_dgl_np, feat2, rtol=1e-5, atol=1e-6), axis=0)}")
+print(f"GraphConv vs. MM-AGG: {np.all(np.isclose(feat2_dgl_np, feat2, rtol=1e-5, atol=1e-6), axis=0)}")
 print((feat2_dgl_np-feat2)[np.nonzero(np.isclose(feat2_dgl_np, feat2, rtol=1e-5, atol=1e-7) == False)])
 
 
@@ -90,14 +91,14 @@ for info in totinfo:
     np.save(path.join(root,info['op_output_data']['write_data_path']), feat)
 
 ir_feat = np.load(path.join(root,"feat5.npy"))
-print(f"ir_feat vs. feat2: {np.all(np.isclose(ir_feat, feat2, rtol=1e-5, atol=1e-6), axis=0)}")
+print(f"MM-AGG vs. IR: {np.all(np.isclose(ir_feat, feat2, rtol=1e-5, atol=1e-6), axis=0)}")
 print((ir_feat-feat2)[np.nonzero(np.isclose(ir_feat, feat2, rtol=1e-5, atol=1e-7) == False)])
 
 from utils import enlarge_and_save
 
 enlarge_and_save(torch.from_numpy(np.load(path.join(root,"true_output.npy"))), 1, "enlarge_true_output")
 true_output = np.load(path.join(root,"enlarge_true_output.npy"))
-print(f"ir_feat vs. true_feat: {np.all(np.isclose(ir_feat, true_output, rtol=1e-2, atol=0), axis=0)}")
+print(f"DGL vs. IR: {np.all(np.isclose(ir_feat, true_output, rtol=1e-2, atol=0), axis=0)}")
 print((np.abs(ir_feat-true_output) / true_output)[np.nonzero(np.isclose(ir_feat, true_output, rtol=1e-2, atol=0) == False)])
 
 
