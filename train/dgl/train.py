@@ -5,6 +5,7 @@ from dgl.data import CoraGraphDataset, CiteseerGraphDataset, PubmedGraphDataset
 from dgl import AddSelfLoop
 import numpy as np
 import argparse
+import time
 
 def evaluate(g, features, labels, mask, model):
     model.eval()
@@ -68,6 +69,8 @@ if __name__ == '__main__':
     g = data[0]
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    torch.cuda.synchronize()
+#    copy_begin = time.perf_counter()
     g = g.int().to(device)
     features = g.ndata['feat']
     labels = g.ndata['label']
@@ -82,12 +85,18 @@ if __name__ == '__main__':
     if args.train == True:
         print('Training...')
         model = GCN(in_size, hidden_size, out_size).to(device)
+        torch.cuda.synchronize()
+        #copy_end = time.perf_counter()
+        #train_begin = time.perf_counter()
         train(g, features, labels, masks, model, args.epochs)
+        torch.cuda.synchronize()
+        #train_end = time.perf_counter()
+        #print(f"Train: {train_end - train_begin} s, Copy: {copy_end - copy_begin} s")
         print(f"Save model to {args.path}")
         torch.save(model, args.path)
     else:
         print("Inference...")
-        model = torch.load(args.path).to(device)
-        model_path = "../trace/output_feature.npy"
-        inference(g, features, model, model_path)
+        model = torch.load(args.path)
+        output_path = "../trace/true_output.npy"
+        inference(g, features, model, output_path)
     

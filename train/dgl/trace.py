@@ -1,5 +1,4 @@
 from gcn import GCN
-from math import log2, pow
 import torch
 import torch.nn.functional as F
 import argparse
@@ -8,6 +7,7 @@ from dgl import AddSelfLoop
 import dgl
 import numpy as np
 import yaml
+from utils import get_upper_multiples_16, enlarge_and_save
 
 
 class Counter:
@@ -28,41 +28,6 @@ class Counter:
 
         return self.states[name] 
 
-def get_upper_power_two(x: int):
-    return int(pow(2, int(log2(x)) + 1))
-
-def enlarge_and_save(t: torch.Tensor, dims ,name: str):
-    print(f"{name}: {t.shape}")
-    if len(t.shape) == 1:
-        old_col = t.shape[0]
-        f = open(f"../trace/{name}.npy", "wb")
-        new_col = get_upper_power_two(old_col)
-        F.pad(t, (0, int(new_col - old_col)), "constant", 0)
-        np.save(f, t.cpu().numpy())
-        f.close()
-        return torch.Size([new_col])
-    if len(t.shape) == 2:
-        (old_row, old_col) = t.shape
-        f = open(f"../trace/{name}.npy", "wb")
-        if dims == (0,1):
-            new_row = get_upper_power_two(old_row)
-            new_col = get_upper_power_two(old_col)
-            F.pad(t, (0, int(new_col - old_col), 0, int(new_row - old_row)), "constant", 0)
-        elif dims == 0:
-            new_row = get_upper_power_two(old_row)
-            new_col = old_col
-            F.pad(t, (0, 0, 0, int(new_row - old_row)), "constant", 0)
-        elif dims == 1:
-            new_col = get_upper_power_two(old_col)
-            new_row = old_row
-            F.pad(t, (0, int(new_col - old_col)), "constant", 0)
-        else:
-            raise NotImplementedError
-        np.save(f, t.cpu().numpy())
-        f.close()
-        return torch.Size((new_row, new_col))
-    raise NotImplementedError
-
 def generate_ir(model, g):
     class Counter:
         def __init__(self, names) -> None:
@@ -75,61 +40,96 @@ def generate_ir(model, g):
                 self.states[name] += 1
             else:
                 self.states[name] = 1
-            return self.states[name]
+            return int(self.states[name])
         
         def query(self, name):
             assert name in self.states.keys()
 
-            return self.states[name] 
+            return int(self.states[name]) 
 
     model.eval()
     final = []
-    counter = Counter(["fc", "agg"])
+    counter = Counter(["fc", "agg", "feat"])
+    counter.add("feat")
     for (i, layer) in enumerate(model.layers):
-        current = {}
         layer_name = layer.__class__.__name__
         if layer_name == "GraphConv":
             reduce_type = "sum"
             relu = False
+            bias = 'bias' in layer.state_dict()
+            assert bias == False, "No support for bias yet"
             if layer.__dict__['_activation'] is not None:
                 if layer.__dict__['_activation'].__name__ == "relu":
                     relu = True
-            in_feat = get_upper_power_two(layer.__dict__['_in_feats'])
-            out_feat = get_upper_power_two(layer.__dict__['_out_feats'])
+            in_feat = get_upper_multiples_16(layer.__dict__['_in_feats'])
+            out_feat = get_upper_multiples_16(layer.__dict__['_out_feats'])
             num_nodes = g.num_nodes()
+            mm = {}
+            agg = {}
 
-            # Add mm
-            current['op_type'] = 'mm'
-            fc_num = int(counter.add("fc"))
-            current['op_name'] = f"fc{fc_num}"
-            if i == 0:
-                current['op_input_data'] = {"data_name": "input_feature", "data_shape": [num_nodes, in_feat], "read_data_path": "input_feature.npy"}
-            else:
-                agg_num = int(counter.query("agg"))
-                current['op_input_data'] = {"data_name": f"agg{agg_num}_out_feature", "data_shape": [num_nodes, in_feat]} # Currently assumes the model is a stack of GraphConv
+            if in_feat > out_feat:
+                # Add mm
+                mm['op_type'] = 'mm'
+                fc_num = counter.add("fc")
+                mm['op_name'] = f"fc{fc_num}"
+                feat_num = counter.query("feat")
+                mm['op_input_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, in_feat], "read_data_path": f"feat{feat_num}.npy"}
+                mm['op_acc_data'] = None
+                feat_num = counter.add("feat")
+                mm['op_output_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, out_feat], "write_data_path": f"feat{feat_num}.npy"}
+                mm['op_weight'] = {"data_name": f"fc{fc_num}_weight", "data_shape": [in_feat, out_feat], "read_data_path": f"fc{fc_num}_weight.npy"}
+                mm['accumulation'] = False
+                mm['bias'] = False
+                mm['relu'] = False
+                final.append(mm)
+
+                # Add agg
+                agg['op_type'] = 'agg'
+                agg_num = counter.add("agg")
+                agg['op_name'] = f"agg{agg_num}"
+                feat_num = counter.query("feat")
+                agg['op_input_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, out_feat], "read_data_path": f"feat{feat_num}.npy"}
+                feat_num = counter.add("feat")
+                agg['op_output_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, out_feat], "write_data_path": f"feat{feat_num}.npy"}
+                agg['op_adj'] = {"data_name": f"agg{agg_num}_adj", "data_shape": [num_nodes, num_nodes], "non_zeros": g.num_edges(), "read_data_path": f"agg{agg_num}_adj.npy", "read_index_path": f"agg{agg_num}_index.npy"}
+                if bias:
+                    agg['op_bias'] = {"data_name": f"bias{agg_num}", "data_shape": [1, out_feat], "read_data_path": f"bias{agg_num}.npy"}
+                agg['apply'] = True
+                agg['reduce_type'] = reduce_type
+                agg['bias'] = bias
+                agg['relu'] = relu
+                final.append(agg)
             
-            current['op_acc_data'] = None
-            current['op_output_data'] = {"data_name": f"fc{fc_num}_out_feature", "data_shape": [num_nodes, out_feat]}
-            current['op_weight'] = {"data_name": f"fc{fc_num}_weight", "data_shape": [in_feat, out_feat], "read_data_path": f"fc{fc_num}_weight.npy"}
-            current['op_bias'] = {"data_name": f"fc{fc_num}_bias", "data_shape": [1, out_feat], "read_data_path": f"fc{fc_num}_bias.npy"}
-            current['accumulation'] = False
-            current['bias'] = True
-            current['relu'] = relu
-            final.append(current)
-
-            # Add agg
-            current = {}
-            current['op_type'] = 'agg'
-            agg_num = int(counter.add("agg"))
-            current['op_name'] = f"agg{agg_num}"
-            fc_num = int(counter.query("fc"))
-            current['op_input_data'] = {"data_name": f"fc{fc_num}_out_feature", "data_shape": [num_nodes, out_feat]}
-            current['op_output_data'] = {"data_name": f"agg{agg_num}_out_feature", "data_shape": [num_nodes, out_feat]}
-            current['op_adj'] = {"data_name": f"agg{agg_num}_adj", "data_shape": [num_nodes, num_nodes], "non_zeros": g.num_edges(), "read_data_path": f"agg{agg_num}_adj.npy", "read_index_path": f"agg{agg_num}_index.npy"}
-            current['apply'] = True
-            current['reduce_type'] = reduce_type
-            current['relu'] = relu
-            final.append(current)
+            else:
+                agg['op_type'] = 'agg'
+                agg_num = counter.add("agg")
+                agg['op_name'] = f"agg{agg_num}"
+                feat_num = counter.query("feat")
+                agg['op_input_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, in_feat], "read_data_path": f"feat{feat_num}.npy"}
+                feat_num = counter.add("feat")
+                agg['op_output_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, in_feat], "write_data_path": f"feat{feat_num}.npy"}
+                agg['op_adj'] = {"data_name": f"agg{agg_num}_adj", "data_shape": [num_nodes, num_nodes], "non_zeros": g.num_edges(), "read_data_path": f"agg{agg_num}_adj.npy", "read_index_path": f"agg{agg_num}_index.npy"}
+                agg['apply'] = True
+                agg['reduce_type'] = reduce_type
+                agg['bias'] = False
+                agg['relu'] = False
+                final.append(agg)
+                
+                mm['op_type'] = 'mm'
+                fc_num = counter.add("fc")
+                mm['op_name'] = f"fc{fc_num}"
+                feat_num = counter.query("feat")
+                mm['op_input_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, in_feat], "read_data_path": f"feat{feat_num}.npy"}
+                mm['op_acc_data'] = None
+                feat_num = counter.add("feat")
+                mm['op_output_data'] = {"data_name": f"feat{feat_num}", "data_shape": [num_nodes, out_feat], "write_data_path": f"feat{feat_num}.npy"}
+                mm['op_weight'] = {"data_name": f"fc{fc_num}_weight", "data_shape": [in_feat, out_feat], "read_data_path": f"fc{fc_num}_weight.npy"}
+                if bias:
+                    mm['op_bias'] = {"data_name": f"bias{fc_num}", "data_shape": [1, out_feat], "read_data_path": f"bias{fc_num}.npy"}
+                mm['accumulation'] = False
+                mm['bias'] = bias
+                mm['relu'] = relu
+                final.append(mm)
 
     f = open("../trace/ir_generated.yaml", "w")
     yaml.dump(final, f)
@@ -176,13 +176,14 @@ def save_all(model, g):
     model.eval()
     for (i, layer) in enumerate(model.layers):
         if i == 0:
-            enlarge_and_save(g.ndata['feat'], 1, "input_feature")
+            enlarge_and_save(g.ndata['feat'], 1, "feat1")
         layer_name = layer.__class__.__name__
         if layer_name == "GraphConv":
-            fc_num = int(counter.add("fc"))
+            fc_num = counter.add("fc")
             enlarge_and_save(layer.state_dict()['weight'], (0,1), f"fc{fc_num}_weight")
-            enlarge_and_save(layer.state_dict()['bias'], (0,1), f"fc{fc_num}_bias")
-            agg_num = int(counter.add("agg"))
+            if 'bias' in layer.state_dict():
+                enlarge_and_save(layer.state_dict()['bias'], (0,1), f"bias{fc_num}")
+            agg_num = counter.add("agg")
             save_adj(g, layer._norm, f"agg{agg_num}")
 
 
