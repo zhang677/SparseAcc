@@ -1,0 +1,13 @@
+CREATE TABLE A (
+  A_EDGE    INT PRIMARY KEY,
+  A_CRD0    INT,
+  A_CRD1    INT,
+  A_VAL     FLOAT
+);
+
+CREATE TABLE B (
+  B_CRD0    INT,
+  B_CRD1    INT,
+  B_VAL     FLOAT,
+  PRIMARY KEY (B_CRD0, B_CRD1)
+);
